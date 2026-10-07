@@ -7,8 +7,16 @@ import ActionsPanel from "./ActionsPanel";
 import StatBar from "./StatBar";
 import PeoplePanel from "./PeoplePanel";
 import AilmentList from "./AilmentList";
+import SavePanel from "./SavePanel";
+import HouseholdPanel from "./HouseholdPanel";
+import YearReview from "./YearReview";
 
 interface Props {
+  sim: LifeSim | null;
+  onReplaceSession: (sim: LifeSim) => void;
+  onSessionChange: () => void;
+  saveMessage: string;
+  onSaveMessage: (message: string) => void;
   packs: EventPack[];
   bundledPacks: LoadedPack[];
   enabledPackIds: string[];
@@ -18,11 +26,10 @@ interface Props {
   onImportPack: (pack: LoadedPack) => void;
 }
 
-export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogglePack, disabledSections, onToggleSection, onImportPack }: Props) {
-  const [sim, setSim] = useState<LifeSim | null>(null);
+export default function GameScreen({ sim, onReplaceSession, onSessionChange, saveMessage, onSaveMessage, packs, bundledPacks, enabledPackIds, onTogglePack, disabledSections, onToggleSection, onImportPack }: Props) {
   const [name, setName] = useState("Alex");
   const [seedText, setSeedText] = useState("");
-  const [, forceRender] = useState(0);
+  const [householdMode, setHouseholdMode] = useState(true);
   const [importError, setImportError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -33,11 +40,8 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
   packsRef.current = packs;
 
   const rerender = () => {
-    forceRender((n) => n + 1);
+    onSessionChange();
     requestAnimationFrame(() => {
-      // On mobile the user may be mid-scroll when a new event appears after
-      // tapping Age up — pull the card back into view. No-op when it's
-      // already fully visible.
       eventRef.current?.scrollIntoView({ block: "nearest" });
       logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
     });
@@ -45,9 +49,9 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
 
   const startLife = () => {
     const seed = seedText.trim()
-      ? Number(seedText) || hashSeed(seedText)
+      ? (Number.isFinite(Number(seedText)) ? Number(seedText) : hashSeed(seedText))
       : undefined;
-    setSim(new LifeSim(packsRef.current, { name: name.trim() || "Alex", seed }));
+    onReplaceSession(new LifeSim(packsRef.current, { name: name.trim() || "Alex", seed, livingHousehold: householdMode }));
     setImportError("");
   };
 
@@ -84,7 +88,7 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
           <>
             <div className="char-name">{c.name}</div>
             <div className="char-age">
-              Age {c.age}
+              Age {c.age} · {sim!.world.year}
               {c.alive ? "" : ` — died (${c.deathCause})`}
             </div>
             {STAT_KEYS.map((k) => (
@@ -122,14 +126,16 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
           <p style={{ color: "var(--muted)" }}>No life yet. Start one below.</p>
         )}
         <div className="new-life">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+          <input aria-label="Character name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
           <input
             value={seedText}
+            aria-label="Life seed"
             onChange={(e) => setSeedText(e.target.value)}
             placeholder="Seed (opt.)"
             style={{ maxWidth: 90 }}
           />
         </div>
+        <label className="mode-control"><input type="checkbox" checked={householdMode} onChange={(e) => setHouseholdMode(e.target.checked)} /> Living household for the next life</label>
         <div className="new-life">
           <button className="btn primary" onClick={startLife} style={{ flex: 1 }}>
             New life
@@ -146,6 +152,7 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
           />
         </div>
         {importError && <div className="err">{importError}</div>}
+        <SavePanel sim={sim} onRestore={onReplaceSession} message={saveMessage} onMessage={onSaveMessage} />
       </details>
 
       <div className="center-col">
@@ -156,6 +163,7 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
         >
           {!sim ? "Start a new life" : !c?.alive ? "R.I.P." : pending ? "Choose first" : `Age up → ${c.age + 1}`}
         </button>
+        {sim && <YearReview sim={sim} />}
         {!c?.alive && sim && (
           <div className="dead-banner">
             {c?.name} died at {c?.age} of {c?.deathCause} with $
@@ -199,9 +207,16 @@ export default function GameScreen({ packs, bundledPacks, enabledPackIds, onTogg
 
       <details className="panel fold" open={!isMobile}>
         <summary onClick={(e) => !isMobile && e.preventDefault()}>
-          Loaded packs
-          <span className="fold-mini">{bundledPacks.length} packs</span>
+          World & packs
+          <span className="fold-mini">{sim ? `${sim.world.year} · ${sim.household.enabled ? sim.world.economy.phase : "Classic"}` : `${bundledPacks.length} packs`}</span>
         </summary>
+        {sim && <HouseholdPanel sim={sim} onAct={rerender} />}
+        {sim && <details className="current-packs"><summary>This life's rules</summary>
+          {sim.packSources.map((p, i) => <div key={`${p.id}:${i}`} className="household-note">{p.name} · v{p.version}</div>)}
+          <p className="household-note">{sim.household.enabled ? "Living household" : "Classic mode"}. Saved rules stay with this life.</p>
+        </details>}
+        <h3>Packs for the next life</h3>
+        <p className="household-note">Pack switches take effect when you start a new life.</p>
         {bundledPacks.map((lp) => {
           const p = lp.pack;
           const enabled = enabledPackIds.includes(p.id);

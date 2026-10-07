@@ -249,15 +249,7 @@ const packFileSchema = z
       })
       .optional(),
     sections: z.array(packSection).max(50).optional(),
-  })
-  .refine(
-    (p) =>
-      (p.events?.length ?? 0) > 0 ||
-      (p.sections?.length ?? 0) > 0 ||
-      (p.actions?.length ?? 0) > 0 ||
-      (p.laws?.length ?? 0) > 0,
-    { message: "pack needs at least one event, section, action or law" },
-  );
+  });
 export const eventPackSchema = z.object({
   id,
   name: z.string().min(1).max(200),
@@ -282,7 +274,7 @@ export type PackValidationResult =
  * Parse and semantically validate a raw pack file — flat (v1), nested
  * (sections), or mixed. Returns the flattened pack plus the section map.
  */
-export function validatePackFile(data: unknown): PackValidationResult {
+export function validatePackFile(data: unknown, options: { allowEmpty?: boolean } = {}): PackValidationResult {
   const parsed = packFileSchema.safeParse(data);
   if (!parsed.success) {
     return {
@@ -294,6 +286,10 @@ export function validatePackFile(data: unknown): PackValidationResult {
   }
   const file = parsed.data as PackFile;
   const errors: string[] = [];
+  // A saved life can legitimately contain a pack with every section disabled.
+  if (!options.allowEmpty && !file.events?.length && !file.sections?.length && !file.actions?.length && !file.laws?.length) {
+    errors.push("pack needs at least one event, section, action or law");
+  }
 
   const sectionIds = new Set<string>();
   for (const s of file.sections ?? []) {

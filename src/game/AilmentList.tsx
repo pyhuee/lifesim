@@ -65,7 +65,7 @@ function AilmentRow({
             <button
               key={o.treatment.id}
               className="btn mini"
-              disabled={!o.affordable}
+              disabled={!o.affordable || !!sim.pending || !sim.character.alive}
               title={
                 o.affordable
                   ? `${o.treatment.label} — ${Math.round(o.treatment.cureChance * 100)}% cure`

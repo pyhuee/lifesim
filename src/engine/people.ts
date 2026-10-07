@@ -26,12 +26,10 @@ const PERSON_TRAITS = [
 
 const pick = <T>(rng: Rng, arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)];
 
-let personCounter = 0;
-const nextId = () => `p${++personCounter}`;
-
 function makePerson(
   rng: Rng,
   init: Omit<Person, "id" | "traits" | "alive" | "memories" | "lastActAge"> & { memories?: string[] },
+  id: string,
 ): Person {
   const traits: string[] = [];
   const n = 1 + Math.floor(rng() * 2);
@@ -40,7 +38,7 @@ function makePerson(
     if (!traits.includes(t)) traits.push(t);
   }
   return {
-    id: nextId(),
+    id,
     name: init.name,
     age: init.age,
     relation: init.relation,
@@ -82,7 +80,7 @@ export function genFamily(rng: Rng, pools: NamePools): Person[] {
         relation,
         rel,
         metAge: 0,
-      }),
+      }, `p${people.length + 1}`),
     );
 
   mk("mother", 24 + Math.floor(rng() * 17), 75 + Math.floor(rng() * 20));
@@ -101,7 +99,7 @@ export function genPerson(
   pools: NamePools,
   role: Relation,
   playerAge: number,
-  opts: { name?: string; rel?: number } = {},
+  opts: { id: string; name?: string; rel?: number },
 ): Person {
   const surname = role === "child" || role === "sibling" ? "" : ` ${pick(rng, pools.last)}`;
   const baseRel: Partial<Record<Relation, number>> = {
@@ -121,7 +119,15 @@ export function genPerson(
     relation: role,
     rel: opts.rel ?? baseRel[role] ?? 30,
     metAge: playerAge,
-  });
+  }, opts.id);
+}
+
+/** Identity belongs to a life, so checkpoints and parallel lives cannot interfere. */
+export function nextPersonId(people: Person[]): string {
+  const ids = new Set(people.map((p) => p.id));
+  let next = people.length + 1;
+  while (ids.has(`p${next}`)) next++;
+  return `p${next}`;
 }
 
 /** Living, not-moved people matching a selector (best rel match first). */

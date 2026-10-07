@@ -1,4 +1,5 @@
 import { evalCondition, effectiveWeight } from "./conditions";
+import { hiringModifier, HOUSEHOLD_JOB, jobSalary } from "./household";
 import type { LifeSim } from "./engine";
 import type { Character, Choice, GameAction, Job, ShopItem } from "./types";
 
@@ -104,7 +105,7 @@ export function actionYearTick(sim: LifeSim): string[] {
 
 /* --------------------------------- actions --------------------------------- */
 
-const countsBudget = (a: GameAction) => a.usesBudget ?? a.category === "life";
+const countsBudget = (a: GameAction) => a.usesBudget ?? (a.category ?? "life") === "life";
 
 export interface ActionStatus {
   action: GameAction;
@@ -125,7 +126,7 @@ export function actionStatus(sim: LifeSim, action: GameAction): ActionStatus {
   else if (action.cost && !action.allowDebt && c.money < action.cost)
     reason = "Can't afford it";
   else if (countsBudget(action) && num(c, "action_budget") <= 0)
-    reason = "No life actions left this year";
+    reason = "No activities left this year";
   return { action, eligible: !reason, usesLeft, reason };
 }
 
@@ -185,6 +186,7 @@ export function jobStatus(sim: LifeSim, job: Job): JobStatus {
   else if (c.flags.in_prison) reason = "In prison";
   else if (applied(c)[job.id]) reason = "Already applied this year";
   else if (!evalCondition(job.conditions, c)) reason = job.hint ?? "Locked";
+  else if (actionsLeft(sim) <= 0) reason = "No activities left this year";
   return { job, eligible: !reason, current, reason };
 }
 
@@ -202,20 +204,23 @@ export function applyForJob(sim: LifeSim, jobId: string): { ok: boolean; reason?
   if (!st.eligible) return { ok: false, reason: st.reason };
 
   const c = sim.character;
+  c.flags.action_budget = actionsLeft(sim) - 1;
   applied(c)[job.id] = true;
   sim.log.push({ age: c.age, text: `→ Applied for ${job.title}`, kind: "event" });
 
-  const p = Math.min(95, Math.max(5, effectiveWeight(job.hireWeight ?? 65, job.hireModifiers, c)));
+  const p = Math.min(95, Math.max(5, effectiveWeight(job.hireWeight ?? 65, job.hireModifiers, c) + hiringModifier(sim)));
   if (sim.rng() * 100 < p) {
     c.flags.employed = true;
-    c.flags.salary = job.salary;
+    c.flags.salary = jobSalary(sim, job);
     c.flags.job = job.title;
+    sim.household.employment = sim.household.enabled && job.id === HOUSEHOLD_JOB.id
+      ? { tenure: 0, performance: 50 } : null;
     delete c.flags.seeking_work;
     c.stats.happiness = Math.min(100, c.stats.happiness + 6);
     c.history[`job_${job.id}`] = "hired";
     sim.log.push({
       age: c.age,
-      text: `Hired as ${job.title} — $${job.salary.toLocaleString()}/year.`,
+      text: `Hired as ${job.title} — $${Number(c.flags.salary).toLocaleString()}/year.`,
       kind: "result",
     });
   } else {
@@ -228,11 +233,13 @@ export function applyForJob(sim: LifeSim, jobId: string): { ok: boolean; reason?
 
 export function quitJob(sim: LifeSim): boolean {
   const c = sim.character;
+  if (sim.pending || !c.alive) return false;
   if (!c.flags.employed) return false;
   const title = String(c.flags.job ?? "your job");
   delete c.flags.employed;
   delete c.flags.salary;
   delete c.flags.job;
+  sim.household.employment = null;
   c.flags.seeking_work = true;
   sim.log.push({ age: c.age, text: `→ Quit ${title}.`, kind: "event" });
   return true;

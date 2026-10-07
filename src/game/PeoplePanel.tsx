@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LifeSim } from "../engine/engine";
 import type { Person } from "../engine/types";
+import { actionsLeft } from "../engine/actions";
 
 /**
  * People menu: persistent NPCs (family, friends, partners, coworkers, kids)
@@ -95,7 +96,7 @@ function PersonRow({
             ))}
             {!actions.length && (
               <span style={{ color: "var(--muted)", fontSize: 12 }}>
-                No actions available right now.
+                {sim.pending ? "Resolve the event first." : !sim.character.alive ? "This life is over." : actionsLeft(sim) <= 0 ? "No activities left this year." : "No actions available right now."}
               </span>
             )}
           </div>

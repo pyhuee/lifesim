@@ -13,7 +13,8 @@ npm run dev        # http://localhost:5173
 Other scripts:
 
 ```bash
-npm test           # engine unit tests (vitest)
+npm test           # engine, save, and UI integration tests (vitest)
+npm run typecheck  # check TypeScript without building
 npm run build      # type-check + production build to dist/
 npm run preview    # serve the production build
 ```
@@ -76,6 +77,46 @@ npm run preview    # serve the production build
   semantic checks: unique ids, dangling `goto`s, choices without outcomes) is
   run on every import, and the engine only interprets validated data — no
   `eval`, no code paths in pack files.
+
+## Living households & saves
+
+New lives enable **Living household** by default. The calendar begins in
+2000 and the world moves through growth, stability, recession, and recovery.
+Inflation changes household bills and new job offers. Adults pay for housing,
+essentials, and dependent children or a spouse; children have no household bills.
+Living with family costs less than moving out. Careful, balanced, and comfortable
+budgets trade spending against happiness. If the last family host dies or leaves,
+the household moves to independent housing automatically.
+
+The **Harbor Works Assistant** job offers an ongoing career: employer health
+affects hiring and layoffs, while skill development improves performance and
+promotion chances. Raises and promotions appear in the yearly review. Recession
+layoffs include severance. Other pack-defined careers continue to work.
+
+Life activities, job applications, social interactions, and household decisions
+share the existing yearly activity budget. Resolve the current event before
+taking other actions. Shopping, gambling, investments, and medical treatment
+keep their existing rules. The annual review shows income, itemized household
+bills, other money changes, and stat changes from the automatic yearly update;
+choices made afterward appear in the life log and the next year's opening balance.
+
+Uncheck **Living household** before starting a new life for classic play without
+the built-in economy and household expenses. Pack world laws still apply in both
+modes. Engine callers retain classic mode unless they pass
+`{ livingHousehold: true }` to `LifeSim`.
+
+Each new life and gameplay change autosaves in this browser. **Save & resume**
+also has three manual slots and JSON import/export. Saves include the exact active
+pack rules, RNG state, NPCs, ailments, household, pending event and offered choices,
+and history, so loading continues the same seeded life. Changing pack checkboxes
+affects the next new life. Save imports are validated before replacing the current
+session; unsupported versions and invalid files leave it intact. Export a file to
+move a life between browsers or keep a backup if browser storage is cleared.
+
+Switching between Play and Mod Editor keeps the current life. Editor playtests
+run in a separate classic session and do not change the regular autosave.
+**End playtest** returns to the regular life; explicitly loading a save or starting
+a new life replaces it.
 
 ## Pack format
 

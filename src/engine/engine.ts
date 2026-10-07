@@ -1,11 +1,17 @@
 import { evalCondition, effectiveWeight } from "./conditions";
-import { actionYearTick } from "./actions";
+import { actionYearTick, actionsLeft } from "./actions";
 import { applyWorldLaws } from "./world";
-import { makeRng, weightedPick, type Rng } from "./rng";
+import { makeRng, weightedPick, type StatefulRng } from "./rng";
+import {
+  advanceWorld, createHousehold, createWorld, employerTick, HOUSEHOLD_JOB,
+  householdTick, syncEmployment,
+  type HouseholdState, type WorldState, type YearSummary,
+} from "./household";
 import {
   availableActions,
   genFamily,
   genPerson,
+  nextPersonId,
   interpolate,
   matchPeople,
   mergedNamePools,
@@ -58,6 +64,9 @@ const MAX_GOTO_DEPTH = 5;
 export interface SimOptions {
   seed?: number;
   name?: string;
+  /** Opt-in for engine callers; the game's new-life UI enables it by default. */
+  livingHousehold?: boolean;
+  startYear?: number;
 }
 
 /**
@@ -66,7 +75,12 @@ export interface SimOptions {
  * applies the player's choice. Everything is deterministic for a given seed.
  */
 export class LifeSim {
-  readonly rng: Rng;
+  readonly rng: StatefulRng;
+  /** Exact pack definitions used by this life, including imported content. */
+  readonly packSources: EventPack[] = [];
+  world: WorldState;
+  household: HouseholdState;
+  summaries: YearSummary[] = [];
   /** Effective seed used for stream-isolated world noise. */
   readonly seed: number;
   readonly laws = new Map<string, WorldLaw>();
@@ -85,7 +99,10 @@ export class LifeSim {
   constructor(packs: EventPack[], opts: SimOptions = {}) {
     this.seed = opts.seed ?? Math.floor(Math.random() * 2 ** 31);
     this.rng = makeRng(this.seed);
+    this.world = createWorld(opts.startYear);
+    this.household = createHousehold(opts.livingHousehold);
     for (const pack of packs) this.loadPack(pack);
+    if (this.household.enabled) this.jobs.set(HOUSEHOLD_JOB.id, HOUSEHOLD_JOB);
     this.namePools = mergedNamePools(packs);
     this.character = this.birth(opts.name ?? "Alex");
   }
@@ -93,6 +110,7 @@ export class LifeSim {
   /** Merge a pack's content into the pool. Ids must be unique across packs. */
   /** Merge a pack's events (and disease defs) into the pool. */
   loadPack(pack: EventPack) {
+    this.packSources.push(structuredClone(pack));
     for (const ev of pack.events) this.events.set(ev.id, ev);
     for (const a of pack.actions ?? []) this.actions.set(a.id, a);
     for (const i of pack.items ?? []) this.items.set(i.id, i);
@@ -133,12 +151,15 @@ export class LifeSim {
 
   private passiveTick() {
     const c = this.character;
-    const notes: string[] = [];
+    const notes: string[] = [...advanceWorld(this), ...employerTick(this)];
+    let income = 0;
+    let expenses: YearSummary["expenses"] = { housing: 0, essentials: 0, dependents: 0 };
 
     if (c.flags.in_school) c.stats.smarts = clamp(c.stats.smarts + 1);
     if (c.flags.employed) {
       const salary = Number(c.flags.salary ?? 0);
       c.money += salary;
+      income += salary;
       if (salary) notes.push(`Earned $${salary.toLocaleString()} at work.`);
     }
     if (c.flags.in_prison) {
@@ -162,13 +183,13 @@ export class LifeSim {
 
     // Persistent NPCs age, drift, move away and pass on.
     notes.push(...peopleTick(c, this.rng));
-    if (!c.alive) return notes;
+    if (!c.alive) return { notes, income, expenses };
     // Diseases: drains, progression, expiry, lethality, new onsets.
     const sick = ailmentTick(c, this.ailments, this.rng);
     notes.push(...sick.notes);
     if (sick.died) {
       this.die(sick.died);
-      return notes;
+      return { notes, income, expenses };
     }
 
     // Mild recovery — a body carrying little or no condition load repairs
@@ -190,7 +211,13 @@ export class LifeSim {
     // untouched. Their state changes can still affect event eligibility.
     notes.push(...applyWorldLaws(this));
 
-    return notes;
+    if (c.alive) {
+      const bills = householdTick(this);
+      expenses = bills.expenses;
+      notes.push(...bills.notes);
+    }
+
+    return { notes, income, expenses };
   }
 
   private checkDeath(): boolean {
@@ -258,12 +285,29 @@ export class LifeSim {
     if (!c.alive) return null;
     if (this.pending) return this.pending; // must resolve the pending event first
 
+    const openingMoney = c.money;
+    const openingStats = { ...c.stats };
     c.age += 1;
     this.log.push({ age: c.age, text: `Age ${c.age}`, kind: "year" });
-    for (const note of this.passiveTick()) {
+    const tick = this.passiveTick();
+    for (const note of tick.notes) {
       this.log.push({ age: c.age, text: note, kind: "year" });
     }
-    if (this.checkDeath()) return null;
+    const died = this.checkDeath();
+    const totalExpenses = tick.expenses.housing + tick.expenses.essentials + tick.expenses.dependents;
+    this.summaries.push({
+      year: this.world.year, age: c.age, economy: this.world.economy.phase,
+      openingMoney, closingMoney: c.money, income: tick.income, expenses: tick.expenses,
+      otherMoney: c.money - openingMoney - tick.income + totalExpenses,
+      statChanges: {
+        health: c.stats.health - openingStats.health,
+        happiness: c.stats.happiness - openingStats.happiness,
+        smarts: c.stats.smarts - openingStats.smarts,
+        looks: c.stats.looks - openingStats.looks,
+      },
+      notes: tick.notes,
+    });
+    if (died) return null;
 
     const entries = this.eligibleEvents();
     const eligible = entries.map((e) => e.event);
@@ -450,6 +494,7 @@ export class LifeSim {
           break;
         case "person": {
           const p = genPerson(this.rng, this.namePools, e.role, c.age, {
+            id: nextPersonId(c.people),
             name: e.name,
             rel: e.rel,
           });
@@ -466,6 +511,7 @@ export class LifeSim {
           break;
       }
     }
+    syncEmployment(this);
   }
 
   /* --------------------------- people & health UI -------------------------- */
@@ -481,6 +527,7 @@ export class LifeSim {
 
   /** Actions the player can take on a person right now. */
   peopleActions(personId: string): PeopleAction[] {
+    if (this.pending || !this.character.alive || actionsLeft(this) <= 0) return [];
     const p = this.character.people.find((x) => x.id === personId);
     return p ? availableActions(this.character, p) : [];
   }
@@ -490,6 +537,11 @@ export class LifeSim {
     const c = this.character;
     const p = c.people.find((x) => x.id === personId);
     if (!p) return "(no such person)";
+    if (this.pending) return "Resolve the current event first.";
+    if (!c.alive) return "This life is over.";
+    if (actionsLeft(this) <= 0) return "No activities left this year.";
+    if (!availableActions(c, p).some((a) => a.id === actionId)) return "That interaction isn't available.";
+    c.flags.action_budget = actionsLeft(this) - 1;
     const text = runPeopleAction(c, p, actionId, this.rng);
     this.log.push({ age: c.age, text, kind: "result" });
     return text;
@@ -504,6 +556,8 @@ export class LifeSim {
 
   /** Pay for and attempt a treatment; logs and returns the result line. */
   treat(ailmentId: string, treatmentId: string): string {
+    if (this.pending) return "Resolve the current event first.";
+    if (!this.character.alive) return "This life is over.";
     const text = treatAilment(
       this.character,
       ailmentId,
